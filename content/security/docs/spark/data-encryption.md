@@ -1,5 +1,85 @@
 # **EMR Containers Spark - In transit and At Rest data encryption**
 
+### **Spark Authentication**  
+Spark application submitted to EMR on EKS spawns driver and executor pods in the EKS namespace configured in the virtual cluster.EKS is a multi tenant platform that can execute different workloads concurrently. Spark authentication provides the ability for the spark driver and executor pods to share a common secret and use it as a authentication mechanism for communicating with each other.  
+####Authentication secret passed as env variable  
+
+From EMR 6.x release `spark.authenticate` is set to `true` by default. With this configuration, spark will automatically generate an authentication secret that is unique for every application.
+This approach passes the generated secret as a environment variable to the pod, hence when the pod is described `kubectl describe pod <executor pod name> -n <EKS namespace>` the generated secret will be displayed in the output.
+If this model is used, controls has to be put in to restrict who can describe pods.  
+In this model, optionally a custom value can be passed as the secret through `spark.authenticate.secret` configuration.
+When this is specified, spark does not auto generate the secret but uses the passed in custom value. This configuration is optional in EMR 6.x releases and mandatory in EMR 5.x releases when `spark.authenticate` is set to `true`.  
+
+**Request:** 
+
+```
+cat > spark-python-in-s3-authenticate-custom-env.json <<EOF
+{
+  "name": "spark-python-in-s3-authenticate-custom-env", 
+  "virtualClusterId": "<virtual-cluster-id>", 
+  "executionRoleArn": "<execution-role-arn>", 
+  "releaseLabel": "emr-6.2.0-latest", 
+  "jobDriver": {
+    "sparkSubmitJobDriver": {
+      "entryPoint": "s3://<s3 prefix>/pi.py", 
+       "sparkSubmitParameters": "--conf spark.executor.instances=10 --conf spark.driver.cores=2  --conf spark.executor.memory=20G --conf spark.driver.memory=20G --conf spark.executor.cores=2"
+    }
+  }, 
+  "configurationOverrides": {
+    "applicationConfiguration": [
+      {
+        "classification": "spark-defaults", 
+        "properties": {
+          "spark.dynamicAllocation.enabled":"false",
+          "spark.authenticate.secret":"test123"
+         }
+       }
+    ], 
+    "monitoringConfiguration": {
+      "persistentAppUI": "ENABLED", 
+      "cloudWatchMonitoringConfiguration": {
+        "logGroupName": "/emr-containers/jobs", 
+        "logStreamNamePrefix": "demo"
+      }, 
+      "s3MonitoringConfiguration": {
+        "logUri": "s3://joblogs"
+      }
+    }
+  }
+}
+EOF
+
+aws emr-containers start-job-run --cli-input-json file:///spark-python-in-s3-authenticate-custom-env.json
+
+
+```  
+In the above request `"spark.authenticate.secret":"test123"` configures the spark application to use `test123` as the secret to authenticate for communication between driver and executor pods.
+When the executor pod is described, the base 64 encoded value of the secret `test123` is displayed in the executor pod spec within the executor container spec as below
+```
+- name: _SPARK_AUTH_SECRET
+          value: 2a5dd430270656b68f5efd2582c2777302a52c5ccc91ad51fad16bbf51a28664
+
+```
+
+### **Encryption In Transit** 
+
+
+####Authentication secret passed as kubernetes secret  
+
+The secret to be used for authentication is stored as a [kubernetes secret](https://kubernetes.io/docs/concepts/configuration/secret/#using-secrets-as-environment-variables) as below
+```
+kubectl create secret generic spark-authenticate-secret --from-literal secret=test123 -n <namespace>
+
+```
+ 
+
+####Authentication secret passed as file  
+
+
+
+
+
+
 ### **Encryption at Rest**   
 ####Amazon S3 Client-Side Encryption
 
